@@ -27,7 +27,7 @@ app = FastAPI(title="Recruiter Signal API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_ORIGIN],
+    allow_origins=[settings.FRONTEND_ORIGIN,"https://recruiter-dashboard-lkbg.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
