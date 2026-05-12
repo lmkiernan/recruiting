@@ -3,7 +3,10 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.core.config import settings
 
-engine = create_engine(settings.DATABASE_URL, echo=False, pool_pre_ping=True)
+# Render (and Heroku) issue postgres:// URLs; SQLAlchemy 1.4+ requires postgresql://
+_db_url = settings.DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(_db_url, echo=False, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
