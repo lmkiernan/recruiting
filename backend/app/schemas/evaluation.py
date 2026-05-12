@@ -21,16 +21,25 @@ class EvaluationRunOut(BaseModel):
     completed_at: datetime | None
 
 
-class CandidateEvaluationOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class ScoreBreakdownItem(BaseModel):
+    label: str
+    score: float
+    max: int
 
+
+class CandidateEvaluationOut(BaseModel):
     id: int
     candidate_id: int
     heuristic_score: float | None
+    ai_score: float | None
     final_score: float | None
     technical_match: float | None
     activity_signal: float | None
     profile_completeness_score: float | None
+    summary: str | None
+    breakdown: list[ScoreBreakdownItem]
+    evidence: list[str]
+    concerns: list[str]
     status: str
     candidate: CandidateSummary
 

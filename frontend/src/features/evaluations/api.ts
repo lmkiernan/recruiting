@@ -1,4 +1,4 @@
-import type { EvaluationRunWithResults } from "./types";
+import type { CandidateEvaluation, EvaluationRunWithResults } from "./types";
 
 const BASE = "/api";
 
@@ -25,4 +25,16 @@ async function createEvaluationRun(jobId: number): Promise<EvaluationRunWithResu
 export async function runEvaluation(description: string): Promise<EvaluationRunWithResults> {
   const job = await createJob(description);
   return createEvaluationRun(job.id);
+}
+
+export async function fetchRunStatus(runId: number): Promise<{ status: string; completed_count: number; candidate_count: number }> {
+  const res = await fetch(`${BASE}/evaluation-runs/${runId}`);
+  if (!res.ok) throw new Error(`Failed to fetch run status: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchRunCandidates(runId: number): Promise<CandidateEvaluation[]> {
+  const res = await fetch(`${BASE}/evaluation-runs/${runId}/candidates`);
+  if (!res.ok) throw new Error(`Failed to fetch run candidates: ${res.status}`);
+  return res.json() as Promise<CandidateEvaluation[]>;
 }

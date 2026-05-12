@@ -1,13 +1,24 @@
 import type { CandidateSummary } from "../candidates/types";
 
+export interface ScoreBreakdownItem {
+  label: string;
+  score: number;
+  max: number;
+}
+
 export interface CandidateEvaluation {
   id: number;
   candidate_id: number;
   heuristic_score: number | null;
+  ai_score: number | null;
   final_score: number | null;
   technical_match: number | null;
   activity_signal: number | null;
   profile_completeness_score: number | null;
+  summary: string | null;
+  breakdown: ScoreBreakdownItem[];
+  evidence: string[];
+  concerns: string[];
   status: string;
   candidate: CandidateSummary;
 }

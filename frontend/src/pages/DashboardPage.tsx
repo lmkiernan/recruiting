@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { JobDescriptionInput } from "../components/jobs/JobDescriptionInput";
 import { CandidateCard } from "../components/candidates/CandidateCard";
 import { CandidateDetailPanel } from "../components/candidates/CandidateDetailPanel";
@@ -7,7 +7,8 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorState } from "../components/ui/ErrorState";
 import { Spinner } from "../components/ui/Spinner";
 import { runEvaluation } from "../features/evaluations/api";
-import type { EvaluationRunWithResults } from "../features/evaluations/types";
+import { useEvaluationPolling } from "../features/evaluations/hooks";
+import type { CandidateEvaluation, EvaluationRunWithResults } from "../features/evaluations/types";
 import { useCandidates } from "../features/candidates/hooks";
 import type { CandidateFilters } from "../features/candidates/types";
 
@@ -32,11 +33,29 @@ export function DashboardPage() {
   const [evalRun, setEvalRun] = useState<EvaluationRunWithResults | null>(null);
 
   const isEvalMode = evalRun !== null;
+  const isAiRunning = evalRun?.status === "heuristic_complete";
 
-  // Browse mode — fetch from backend with filters
-  const browseFilters = { ...filters, q: searchInput };
+  const handlePollUpdate = useCallback(
+    ({ status, completedCount, candidateCount, evaluations }: {
+      status: string; completedCount: number; candidateCount: number; evaluations: CandidateEvaluation[];
+    }) => {
+      setEvalRun((prev) =>
+        prev ? { ...prev, status, completed_count: completedCount, candidate_count: candidateCount, evaluations } : prev
+      );
+    },
+    [],
+  );
+
+  // Poll for AI progress while status is not terminal
+  useEvaluationPolling(
+    isEvalMode ? evalRun.id : null,
+    evalRun?.status ?? "completed",
+    handlePollUpdate,
+  );
+
+  // Browse mode — skip fetching while in eval mode
   const { candidates, loading: browseLoading, error: browseError } = useCandidates(
-    isEvalMode ? null : browseFilters
+    isEvalMode ? null : { ...filters, q: searchInput }
   );
 
   async function handleEvaluate() {
@@ -60,20 +79,25 @@ export function DashboardPage() {
     setSelectedId(null);
   }
 
-  // In eval mode: use ranked results, filter client-side by search input
-  const evalItems = evalRun
-    ? evalRun.evaluations.filter((ev) => {
-        if (!searchInput) return true;
-        const term = searchInput.toLowerCase();
-        const c = ev.candidate;
-        return (
-          c.github_username.toLowerCase().includes(term) ||
-          (c.name ?? "").toLowerCase().includes(term) ||
-          (c.bio ?? "").toLowerCase().includes(term) ||
-          (c.location ?? "").toLowerCase().includes(term)
-        );
-      })
-    : [];
+  const evalItems = useMemo<CandidateEvaluation[]>(() => {
+    if (!evalRun) return [];
+    if (!searchInput) return evalRun.evaluations;
+    const term = searchInput.toLowerCase();
+    return evalRun.evaluations.filter((ev) => {
+      const c = ev.candidate;
+      return (
+        c.github_username.toLowerCase().includes(term) ||
+        (c.name ?? "").toLowerCase().includes(term) ||
+        (c.bio ?? "").toLowerCase().includes(term) ||
+        (c.location ?? "").toLowerCase().includes(term)
+      );
+    });
+  }, [evalRun, searchInput]);
+
+  const selectedEval = useMemo(
+    () => evalRun?.evaluations.find((ev) => ev.candidate_id === selectedId) ?? null,
+    [evalRun, selectedId],
+  );
 
   const listLoading = isEvalMode ? evaluating : browseLoading;
   const listError = isEvalMode ? evalError : browseError;
@@ -107,15 +131,29 @@ export function DashboardPage() {
 
       {/* Center — candidate list */}
       <main className="flex-1 flex flex-col min-w-0 border-r border-gray-200">
-        {/* Eval mode banner */}
+        {/* Status banner */}
         {isEvalMode && (
-          <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center justify-between gap-2">
-            <p className="text-xs text-blue-700 truncate">
-              <span className="font-medium">Ranked by match</span>
-              {" · "}
-              {evalRun.completed_count} candidates scored
+          <div className={`px-4 py-2 border-b flex items-center justify-between gap-2 ${
+            isAiRunning ? "bg-amber-50 border-amber-100" : "bg-blue-50 border-blue-100"
+          }`}>
+            <p className={`text-xs truncate ${isAiRunning ? "text-amber-700" : "text-blue-700"}`}>
+              {isAiRunning ? (
+                <>
+                  <span className="font-medium">AI analysis running</span>
+                  {evalRun.completed_count > 0 && ` · ${evalRun.completed_count}/${Math.min(evalRun.candidate_count, 25)} scored`}
+                  <span className="ml-1 inline-block animate-pulse">…</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-medium">AI analysis complete</span>
+                  {" · "}ranked by match
+                </>
+              )}
             </p>
-            <button onClick={handleClearEval} className="text-xs text-blue-400 hover:text-blue-600 shrink-0">
+            <button
+              onClick={handleClearEval}
+              className={`text-xs shrink-0 ${isAiRunning ? "text-amber-400 hover:text-amber-600" : "text-blue-400 hover:text-blue-600"}`}
+            >
               ✕ Clear
             </button>
           </div>
@@ -140,7 +178,6 @@ export function DashboardPage() {
           {listLoading && <Spinner />}
           {!listLoading && listError && <ErrorState message={listError} />}
 
-          {/* Eval mode */}
           {!listLoading && !listError && isEvalMode && (
             <>
               {evalItems.length === 0 && <EmptyState />}
@@ -151,12 +188,12 @@ export function DashboardPage() {
                   selected={selectedId === ev.candidate_id}
                   onClick={() => setSelectedId(ev.candidate_id)}
                   score={ev.final_score}
+                  aiScored={ev.ai_score !== null}
                 />
               ))}
             </>
           )}
 
-          {/* Browse mode */}
           {!listLoading && !listError && !isEvalMode && (
             <>
               {candidates.length === 0 && <EmptyState />}
@@ -175,7 +212,7 @@ export function DashboardPage() {
 
       {/* Right — detail panel */}
       <aside className="w-96 shrink-0 bg-white overflow-hidden">
-        <CandidateDetailPanel candidateId={selectedId} />
+        <CandidateDetailPanel candidateId={selectedId} evaluation={selectedEval} />
       </aside>
     </div>
   );

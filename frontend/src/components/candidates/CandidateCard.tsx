@@ -1,25 +1,23 @@
 import type { CandidateSummary } from "../../features/candidates/types";
+import { scoreBadgeColor } from "../../utils/scoreColor";
 
 interface Props {
   candidate: CandidateSummary;
   selected: boolean;
   onClick: () => void;
   score?: number | null;
+  aiScored?: boolean;
 }
 
 function ScoreBadge({ score }: { score: number }) {
-  const color =
-    score >= 70 ? "bg-green-100 text-green-700" :
-    score >= 45 ? "bg-yellow-100 text-yellow-700" :
-    "bg-gray-100 text-gray-500";
   return (
-    <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${color}`}>
+    <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${scoreBadgeColor(score)}`}>
       {Math.round(score)}
     </span>
   );
 }
 
-export function CandidateCard({ candidate, selected, onClick, score }: Props) {
+export function CandidateCard({ candidate, selected, onClick, score, aiScored }: Props) {
   const displayName = candidate.name ?? candidate.github_username;
 
   return (
@@ -43,7 +41,16 @@ export function CandidateCard({ candidate, selected, onClick, score }: Props) {
           <p className="font-medium text-gray-900 truncate">{displayName}</p>
           <p className="text-sm text-gray-500 truncate">@{candidate.github_username}</p>
         </div>
-        {score != null && <ScoreBadge score={score} />}
+        {score != null && (
+          <div className="flex items-center gap-1 shrink-0">
+            {aiScored && (
+              <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-purple-100 text-purple-600">
+                AI
+              </span>
+            )}
+            <ScoreBadge score={score} />
+          </div>
+        )}
       </div>
 
       {candidate.bio && (

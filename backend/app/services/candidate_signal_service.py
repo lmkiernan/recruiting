@@ -1,13 +1,13 @@
 """
 Heuristic candidate scoring against a job description.
 
-Produces a 0–100 score built from four components:
-  technical_match   (40 pts) — language + keyword overlap with JD
-  activity_signal   (30 pts) — recency of repo pushes
-  follower_signal   (20 pts) — followers as a weak proxy for community standing
-  completeness      (10 pts) — how filled-in the profile is
+Score breakdown (sums to 100):
+  Technical match  — 50 pts  (language overlap 30 + keyword overlap 20)
+  Activity signal  — 25 pts  (recency of repo pushes)
+  Profile signal   — 15 pts  (completeness 10 + followers 5)
+  Repo quality     — 10 pts  (descriptions, stars)
 
-All sub-scores are also stored normalised to 0–100 for display.
+Each component is computed on a 0–100 sub-scale, then weighted.
 """
 
 import math
@@ -22,7 +22,6 @@ from app.models.candidate import Candidate, CandidateLanguage, CandidateReposito
 # Language / keyword dictionaries
 # ---------------------------------------------------------------------------
 
-# Maps lowercase text → canonical GitHub language name
 LANGUAGE_MAP: dict[str, str] = {
     "python": "Python",
     "javascript": "JavaScript",
@@ -42,7 +41,6 @@ LANGUAGE_MAP: dict[str, str] = {
     "swift": "Swift",
     "kotlin": "Kotlin",
     "scala": "Scala",
-    "r": "R",
     "shell": "Shell",
     "bash": "Shell",
     "html": "HTML",
@@ -54,35 +52,32 @@ LANGUAGE_MAP: dict[str, str] = {
     "clojure": "Clojure",
     "ocaml": "OCaml",
     "lua": "Lua",
-    "vim script": "Vim Script",
 }
 
 TECH_KEYWORDS: set[str] = {
-    # Architecture / patterns
     "api", "rest", "restful", "graphql", "grpc", "microservices", "distributed",
-    "event-driven", "serverless", "monolith",
-    # Frontend
+    "event-driven", "serverless",
     "frontend", "react", "vue", "angular", "svelte", "nextjs", "next.js",
     "html", "css", "tailwind", "webpack", "vite",
-    # Backend
     "backend", "server", "fastapi", "django", "flask", "express", "node",
     "nodejs", "spring", "rails", "laravel", "gin", "fiber", "actix",
-    # Data
     "sql", "nosql", "postgresql", "postgres", "mysql", "sqlite", "mongodb",
-    "redis", "elasticsearch", "kafka", "rabbitmq", "celery",
-    # Cloud / infra
+    "redis", "elasticsearch", "kafka", "rabbitmq", "celery", "database",
     "aws", "gcp", "azure", "cloud", "docker", "kubernetes", "k8s",
-    "terraform", "ci/cd", "github actions", "linux",
-    # Full-stack
+    "terraform", "ci/cd", "github actions", "linux", "devops",
     "full-stack", "fullstack",
-    # ML / data science
     "machine learning", "ml", "deep learning", "nlp", "llm", "ai",
     "data science", "pytorch", "tensorflow", "scikit",
-    # Practices
     "testing", "unit test", "integration test", "tdd", "agile", "startup",
     "open source", "scalable", "performance", "security",
-    # Seniority (not scored, but captured for evidence)
     "junior", "senior", "lead", "principal", "staff",
+}
+
+# Keyword groups used to generate targeted concerns
+CONCERN_GROUPS: dict[str, set[str]] = {
+    "SQL/database": {"sql", "postgresql", "postgres", "mysql", "sqlite", "database", "nosql", "mongodb"},
+    "cloud/deployment": {"aws", "gcp", "azure", "cloud", "docker", "kubernetes", "k8s", "terraform", "devops"},
+    "testing": {"testing", "unit test", "tdd", "integration test"},
 }
 
 
@@ -90,17 +85,11 @@ TECH_KEYWORDS: set[str] = {
 # Parsing helpers
 # ---------------------------------------------------------------------------
 
-def _normalise(text: str) -> str:
-    return text.lower()
-
-
 def extract_languages(jd: str) -> list[str]:
-    """Return canonical language names found in the job description."""
-    norm = _normalise(jd)
+    norm = jd.lower()
     found: list[str] = []
     seen: set[str] = set()
     for keyword, canonical in LANGUAGE_MAP.items():
-        # word-boundary match so "r" doesn't match "react"
         if re.search(rf"\b{re.escape(keyword)}\b", norm) and canonical not in seen:
             found.append(canonical)
             seen.add(canonical)
@@ -108,61 +97,43 @@ def extract_languages(jd: str) -> list[str]:
 
 
 def extract_keywords(jd: str) -> list[str]:
-    """Return tech keywords found in the job description."""
-    norm = _normalise(jd)
+    norm = jd.lower()
     return [kw for kw in TECH_KEYWORDS if kw in norm]
 
 
 # ---------------------------------------------------------------------------
-# Sub-score calculations
+# Sub-score calculations (each returns 0–100)
 # ---------------------------------------------------------------------------
 
-def _language_score(
-    candidate_languages: list[CandidateLanguage],
-    jd_languages: list[str],
-) -> float:
-    """0–100. Each matched language scores proportionally to its repo_count weight."""
+def _language_score(candidate_languages: list[CandidateLanguage], jd_languages: list[str]) -> float:
     if not jd_languages or not candidate_languages:
         return 0.0
-
     lang_map = {l.language.lower(): l.repo_count for l in candidate_languages}
     total_repos = sum(lang_map.values()) or 1
-    matched_repos = sum(
-        lang_map.get(jd_lang.lower(), 0) for jd_lang in jd_languages
-    )
+    matched_repos = sum(lang_map.get(jd_lang.lower(), 0) for jd_lang in jd_languages)
     return min(100.0, (matched_repos / total_repos) * 100)
 
 
-def _keyword_score(
-    candidate: Candidate,
-    repos: list[CandidateRepository],
-    jd_keywords: list[str],
-) -> float:
-    """0–100. Count distinct keyword hits across bio and repo descriptions."""
+def _keyword_score(candidate: Candidate, repos: list[CandidateRepository], jd_keywords: list[str]) -> tuple[float, list[str]]:
+    """Returns (score 0–100, list of matched keywords)."""
     if not jd_keywords:
-        return 0.0
-
-    corpus = " ".join(
-        filter(None, [
-            candidate.bio or "",
-            candidate.company or "",
-            *[repo.description or "" for repo in repos],
-            *[repo.name or "" for repo in repos],
-        ])
-    ).lower()
-
-    hits = sum(1 for kw in jd_keywords if kw in corpus)
-    return min(100.0, (hits / max(len(jd_keywords), 1)) * 100)
+        return 0.0, []
+    corpus = " ".join(filter(None, [
+        candidate.bio or "",
+        candidate.company or "",
+        *[r.description or "" for r in repos],
+        *[r.name or "" for r in repos],
+    ])).lower()
+    found = [kw for kw in jd_keywords if kw in corpus]
+    score = min(100.0, len(found) / max(len(jd_keywords), 1) * 100)
+    return score, found
 
 
 def _activity_score(repos: list[CandidateRepository]) -> float:
-    """0–100. Based on how recently repos were pushed to."""
     if not repos:
         return 0.0
-
     now = datetime.now(timezone.utc)
     scores: list[float] = []
-
     for repo in repos:
         if not repo.pushed_at:
             continue
@@ -171,18 +142,28 @@ def _activity_score(repos: list[CandidateRepository]) -> float:
         except ValueError:
             continue
         days_ago = (now - pushed).days
-        # Decay: pushed today = 100, 1 year ago ≈ 37, 3 years ago ≈ 5
-        score = 100.0 * math.exp(-days_ago / 365)
-        scores.append(score)
-
+        scores.append(100.0 * math.exp(-days_ago / 365))
     return max(scores) if scores else 0.0
 
 
+def _count_recent_repos(repos: list[CandidateRepository], days: int = 180) -> int:
+    now = datetime.now(timezone.utc)
+    count = 0
+    for repo in repos:
+        if not repo.pushed_at:
+            continue
+        try:
+            pushed = datetime.fromisoformat(repo.pushed_at.replace("Z", "+00:00"))
+            if (now - pushed).days <= days:
+                count += 1
+        except ValueError:
+            continue
+    return count
+
+
 def _follower_score(followers: int) -> float:
-    """0–100. Log-scaled within the expected 20–2000 range."""
     if followers <= 0:
         return 0.0
-    # log(20) ≈ 3.0, log(2000) ≈ 7.6
     lo, hi = math.log(20), math.log(2000)
     clamped = min(max(math.log(followers + 1), lo), hi)
     return (clamped - lo) / (hi - lo) * 100
@@ -192,70 +173,154 @@ def _completeness_score(profile_completeness: str | None) -> float:
     return {"high": 100.0, "medium": 60.0, "low": 20.0}.get(profile_completeness or "", 0.0)
 
 
+def _repo_quality_score(repos: list[CandidateRepository]) -> float:
+    if not repos:
+        return 0.0
+    described = sum(1 for r in repos if r.description and len(r.description) > 20)
+    total_stars = sum(r.stars for r in repos)
+    desc_score = min(50.0, (described / max(len(repos), 1)) * 100 * 0.5)
+    star_score = min(40.0, math.log(total_stars + 1) / math.log(100) * 40) if total_stars > 0 else 0.0
+    count_score = 10.0 if len(repos) >= 5 else 5.0
+    return min(100.0, desc_score + star_score + count_score)
+
+
 # ---------------------------------------------------------------------------
-# Main entry point
+# Evidence and concerns generation
 # ---------------------------------------------------------------------------
 
-WEIGHTS = {
-    "language": 0.40,
-    "keyword": 0.30,
-    "activity": 0.20,
-    "follower": 0.05,
-    "completeness": 0.05,
-}
+def _build_evidence(
+    candidate: Candidate,
+    repos: list[CandidateRepository],
+    matched_languages: list[str],
+    found_keywords: list[str],
+    recent_count: int,
+) -> list[str]:
+    ev: list[str] = []
 
+    for lang in matched_languages:
+        count = next((l.repo_count for l in candidate.languages if l.language.lower() == lang.lower()), 0)
+        noun = "repository" if count == 1 else "repositories"
+        ev.append(f"{lang} appears in {count} {noun}")
+
+    if found_keywords:
+        shown = found_keywords[:5]
+        ev.append(f"Keywords found in profile/repos: {', '.join(shown)}")
+
+    if recent_count > 0:
+        noun = "repository" if recent_count == 1 else "repositories"
+        ev.append(f"{recent_count} {noun} pushed in the last 6 months")
+
+    starred = [r for r in repos if r.stars >= 5]
+    if starred:
+        noun = "repository" if len(starred) == 1 else "repositories"
+        ev.append(f"{len(starred)} {noun} with notable GitHub stars")
+
+    if candidate.profile_completeness == "high":
+        ev.append("Profile is highly complete (name, bio, location all present)")
+
+    return ev
+
+
+def _build_concerns(
+    jd_languages: list[str],
+    jd_keywords: list[str],
+    matched_languages: list[str],
+    found_keywords: list[str],
+    recent_count: int,
+    profile_completeness: str | None,
+) -> list[str]:
+    concerns: list[str] = []
+
+    missing_langs = [l for l in jd_languages if l not in matched_languages]
+    for lang in missing_langs[:3]:
+        concerns.append(f"No explicit {lang} signal found in profile or repositories")
+
+    for category, kws in CONCERN_GROUPS.items():
+        jd_wants = any(kw in jd_keywords for kw in kws)
+        candidate_has = any(kw in found_keywords for kw in kws)
+        if jd_wants and not candidate_has:
+            concerns.append(f"No explicit {category} signal found")
+
+    if recent_count == 0:
+        concerns.append("No repository activity found in the last 6 months")
+
+    if profile_completeness == "low":
+        concerns.append("Profile is incomplete — limited signal available")
+
+    return concerns
+
+
+def _build_summary(final_score: float, matched_languages: list[str]) -> str:
+    if final_score >= 75:
+        level = "Strong"
+    elif final_score >= 55:
+        level = "Moderate"
+    elif final_score >= 35:
+        level = "Partial"
+    else:
+        level = "Limited"
+
+    lang_str = f" with {'/'.join(matched_languages[:2])} signal" if matched_languages else ""
+    return f"{level} technical match{lang_str} based on public GitHub data."
+
+
+# ---------------------------------------------------------------------------
+# Main scoring entry point
+# ---------------------------------------------------------------------------
 
 def score_candidate(
     candidate: Candidate,
     jd_languages: list[str],
     jd_keywords: list[str],
 ) -> dict:
-    """
-    Return a dict with heuristic_score and all sub-scores (each 0–100).
-    """
     repos = candidate.repositories
+
     lang_score = _language_score(candidate.languages, jd_languages)
-    kw_score = _keyword_score(candidate, repos, jd_keywords)
+    kw_score, found_keywords = _keyword_score(candidate, repos, jd_keywords)
     act_score = _activity_score(repos)
     fol_score = _follower_score(candidate.followers or 0)
     comp_score = _completeness_score(candidate.profile_completeness)
+    repo_q_score = _repo_quality_score(repos)
+    recent_count = _count_recent_repos(repos, days=180)
 
-    technical_match = lang_score * 0.57 + kw_score * 0.43  # blended technical signal
-    activity_signal = act_score
-    completeness = comp_score
+    # Weighted contribution — sums to 100 pts max
+    tech_pts = lang_score * 0.30 + kw_score * 0.20        # max 50
+    act_pts = act_score * 0.25                              # max 25
+    profile_pts = comp_score * 0.10 + fol_score * 0.05    # max 15
+    repo_pts = repo_q_score * 0.10                         # max 10
 
-    heuristic = (
-        lang_score * WEIGHTS["language"]
-        + kw_score * WEIGHTS["keyword"]
-        + act_score * WEIGHTS["activity"]
-        + fol_score * WEIGHTS["follower"]
-        + comp_score * WEIGHTS["completeness"]
-    )
+    final_score = tech_pts + act_pts + profile_pts + repo_pts
 
     matched_languages = [
         lang for lang in jd_languages
         if any(l.language.lower() == lang.lower() for l in candidate.languages)
     ]
 
+    breakdown = [
+        {"label": "Technical match", "score": round(tech_pts, 1), "max": 50},
+        {"label": "Activity signal", "score": round(act_pts, 1), "max": 25},
+        {"label": "Profile signal",  "score": round(profile_pts, 1), "max": 15},
+        {"label": "Repo quality",    "score": round(repo_pts, 1), "max": 10},
+    ]
+
+    evidence = _build_evidence(candidate, repos, matched_languages, found_keywords, recent_count)
+    concerns = _build_concerns(jd_languages, jd_keywords, matched_languages, found_keywords, recent_count, candidate.profile_completeness)
+    summary = _build_summary(final_score, matched_languages)
+
     return {
-        "heuristic_score": round(heuristic, 1),
-        "final_score": round(heuristic, 1),
-        "technical_match": round(technical_match, 1),
-        "activity_signal": round(activity_signal, 1),
-        "profile_completeness_score": round(completeness, 1),
-        "evidence": {
-            "matched_languages": matched_languages,
-            "top_languages": [l.language for l in candidate.languages[:5]],
-            "repo_count": len(repos),
-        },
+        "heuristic_score": round(final_score, 1),
+        "final_score": round(final_score, 1),
+        "technical_match": round(tech_pts, 1),
+        "activity_signal": round(act_pts, 1),
+        "profile_completeness_score": round(profile_pts, 1),
+        "breakdown": breakdown,
+        "evidence": evidence,
+        "concerns": concerns,
+        "summary": summary,
     }
 
 
 def score_all_candidates(db: Session, job_description: str) -> list[dict]:
-    """
-    Score every candidate in the database against the job description.
-    Returns a list of dicts sorted by heuristic_score descending.
-    """
     jd_languages = extract_languages(job_description)
     jd_keywords = extract_keywords(job_description)
 
@@ -265,10 +330,9 @@ def score_all_candidates(db: Session, job_description: str) -> list[dict]:
         .all()
     )
 
-    results = []
-    for candidate in candidates:
-        scores = score_candidate(candidate, jd_languages, jd_keywords)
-        results.append({"candidate": candidate, **scores})
-
-    results.sort(key=lambda r: r["heuristic_score"], reverse=True)
+    results = [
+        {"candidate": c, **score_candidate(c, jd_languages, jd_keywords)}
+        for c in candidates
+    ]
+    results.sort(key=lambda r: r["final_score"], reverse=True)
     return results

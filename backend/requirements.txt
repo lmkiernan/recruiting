@@ -6,3 +6,4 @@ alembic
 python-dotenv
 httpx
 pydantic-settings
+openai
