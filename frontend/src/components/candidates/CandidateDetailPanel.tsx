@@ -132,7 +132,7 @@ export function CandidateDetailPanel({ candidateId, evaluation, onSummarized }: 
 
   function handleSave() {
     if (!candidateId) return;
-    toggle(candidateId);
+    toggle(candidateId, saved ? undefined : candidate ?? undefined);
   }
 
   async function handleSummarize() {

@@ -18,13 +18,13 @@ function ScoreBadge({ score }: { score: number }) {
   );
 }
 
-function BookmarkButton({ candidateId }: { candidateId: number }) {
+function BookmarkButton({ candidate }: { candidate: CandidateSummary }) {
   const { isSaved, toggle } = useShortlist();
-  const saved = isSaved(candidateId);
+  const saved = isSaved(candidate.id);
 
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); toggle(candidateId); }}
+      onClick={(e) => { e.stopPropagation(); toggle(candidate.id, saved ? undefined : candidate); }}
       title={saved ? "Remove from shortlist" : "Save to shortlist"}
       className="shrink-0 p-1 rounded hover:bg-gray-100 transition-colors"
     >
@@ -79,7 +79,7 @@ export function CandidateCard({ candidate, selected, onClick, score, aiScored }:
               <ScoreBadge score={score} />
             </>
           )}
-          <BookmarkButton candidateId={candidate.id} />
+          <BookmarkButton candidate={candidate} />
         </div>
       </div>
 

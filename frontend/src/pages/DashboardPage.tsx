@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { JobDescriptionInput } from "../components/jobs/JobDescriptionInput";
 import { CandidateCard } from "../components/candidates/CandidateCard";
 import { CandidateDetailPanel } from "../components/candidates/CandidateDetailPanel";
@@ -10,8 +10,7 @@ import { runEvaluation } from "../features/evaluations/api";
 import { useEvaluationPolling } from "../features/evaluations/hooks";
 import type { CandidateEvaluation, EvaluationRunWithResults } from "../features/evaluations/types";
 import { useCandidates } from "../features/candidates/hooks";
-import { fetchCandidate } from "../features/candidates/api";
-import type { CandidateDetail, CandidateFilters } from "../features/candidates/types";
+import type { CandidateFilters } from "../features/candidates/types";
 import { useShortlist } from "../features/shortlists/ShortlistContext";
 
 type View = "browse" | "shortlist";
@@ -41,38 +40,13 @@ export function DashboardPage() {
   const isAiRunning = evalRun?.status === "heuristic_complete";
 
   // ---------------------------------------------------------------------------
-  // Shortlist view — cache fetched candidates, only load new IDs
+  // Shortlist view — reads directly from localStorage cache, no fetch needed
   // ---------------------------------------------------------------------------
-  const { savedIds, count } = useShortlist();
-  const [shortlistCache, setShortlistCache] = useState<Record<number, CandidateDetail>>({});
-  const [shortlistLoading, setShortlistLoading] = useState(false);
-  const [shortlistError, setShortlistError] = useState<string | null>(null);
-  const loadingRef = useRef(false);
-
-  useEffect(() => {
-    if (view !== "shortlist" || savedIds.length === 0) return;
-    const unloaded = savedIds.filter((id) => !(id in shortlistCache));
-    if (unloaded.length === 0 || loadingRef.current) return;
-
-    loadingRef.current = true;
-    setShortlistLoading(true);
-    setShortlistError(null);
-
-    Promise.all(unloaded.map(fetchCandidate))
-      .then((results) =>
-        setShortlistCache((prev) => {
-          const next = { ...prev };
-          results.forEach((c) => { next[c.id] = c; });
-          return next;
-        }),
-      )
-      .catch((e) => setShortlistError(e instanceof Error ? e.message : "Failed to load candidates"))
-      .finally(() => { loadingRef.current = false; setShortlistLoading(false); });
-  }, [view, savedIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { savedIds, candidateCache, count } = useShortlist();
 
   const shortlistCandidates = useMemo(
-    () => savedIds.map((id) => shortlistCache[id]).filter(Boolean) as CandidateDetail[],
-    [savedIds, shortlistCache],
+    () => savedIds.map((id) => candidateCache[id]).filter(Boolean),
+    [savedIds, candidateCache],
   );
 
   const filteredShortlist = useMemo(() => {
@@ -171,8 +145,8 @@ export function DashboardPage() {
 
   // Center column derived state
   const isShortlistView = view === "shortlist";
-  const listLoading = isShortlistView ? shortlistLoading : isEvalMode ? evaluating : browseLoading;
-  const listError = isShortlistView ? shortlistError : isEvalMode ? evalError : browseError;
+  const listLoading = isShortlistView ? false : isEvalMode ? evaluating : browseLoading;
+  const listError = isShortlistView ? null : isEvalMode ? evalError : browseError;
   const listCount = isShortlistView
     ? filteredShortlist.length
     : isEvalMode ? evalItems.length : candidates.length;
