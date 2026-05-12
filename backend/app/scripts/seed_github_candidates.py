@@ -304,7 +304,6 @@ def run(target: int = 100) -> None:
                     failed_count += 1
                     print(f"    Failed to save {login}: {exc}")
 
-                # Stay comfortably under authenticated REST API limits.
                 time.sleep(0.5)
 
         finally:

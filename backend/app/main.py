@@ -4,7 +4,8 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import candidates, evaluations, jobs
+from app.api.routes import candidates, jobs
+from app.api.routes.evaluations import candidate_evals_router, router as evaluations_router
 from app.core.config import settings
 from app.core.database import Base, engine
 
@@ -34,7 +35,8 @@ app.add_middleware(
 
 app.include_router(candidates.router)
 app.include_router(jobs.router)
-app.include_router(evaluations.router)
+app.include_router(evaluations_router)
+app.include_router(candidate_evals_router)
 
 
 @app.get("/health")

@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useCandidateDetail } from "../../features/candidates/hooks";
+import { summarizeCandidateEval } from "../../features/evaluations/api";
 import type { CandidateEvaluation, ScoreBreakdownItem } from "../../features/evaluations/types";
 import { scoreBarColor, scoreTextColor } from "../../utils/scoreColor";
 import { ErrorState } from "../ui/ErrorState";
@@ -7,6 +9,7 @@ import { Spinner } from "../ui/Spinner";
 interface Props {
   candidateId: number | null;
   evaluation?: CandidateEvaluation | null;
+  onSummarized?: (updated: CandidateEvaluation) => void;
 }
 
 function BreakdownBar({ item }: { item: ScoreBreakdownItem }) {
@@ -24,15 +27,25 @@ function BreakdownBar({ item }: { item: ScoreBreakdownItem }) {
   );
 }
 
-function EvalSection({ evaluation }: { evaluation: CandidateEvaluation }) {
+interface EvalSectionProps {
+  evaluation: CandidateEvaluation;
+  summarizing: boolean;
+  summaryError: string | null;
+  onSummarize: () => void;
+}
+
+function EvalSection({ evaluation, summarizing, summaryError, onSummarize }: EvalSectionProps) {
   const score = evaluation.final_score ?? 0;
+  const needsAi = evaluation.ai_score === null;
 
   return (
     <div className="rounded-xl border border-gray-200 p-4 space-y-4 bg-gray-50">
       {/* Score header */}
       <div className="flex items-baseline justify-between">
         <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Preliminary Match</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            {needsAi ? "Preliminary Match" : "AI Match Score"}
+          </p>
           {evaluation.summary && (
             <p className="text-xs text-gray-500 mt-0.5">{evaluation.summary}</p>
           )}
@@ -51,10 +64,12 @@ function EvalSection({ evaluation }: { evaluation: CandidateEvaluation }) {
         </div>
       )}
 
-      {/* Evidence */}
+      {/* Evidence / AI strengths */}
       {evaluation.evidence.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Evidence</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+            {needsAi ? "Evidence" : "Strengths"}
+          </p>
           <ul className="space-y-1">
             {evaluation.evidence.map((e, i) => (
               <li key={i} className="flex gap-2 text-xs text-gray-600">
@@ -80,12 +95,51 @@ function EvalSection({ evaluation }: { evaluation: CandidateEvaluation }) {
           </ul>
         </div>
       )}
+
+      {/* Gemini summarize button — only for candidates not yet AI-scored */}
+      {needsAi && (
+        <div className="pt-1 border-t border-gray-200">
+          {summaryError && (
+            <p className="text-xs text-red-500 mb-2">{summaryError}</p>
+          )}
+          <button
+            onClick={onSummarize}
+            disabled={summarizing}
+            className="w-full flex items-center justify-center gap-2 py-1.5 px-3 rounded-lg text-xs font-medium bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {summarizing ? (
+              <>
+                <span className="inline-block h-3 w-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin" />
+                Summarizing…
+              </>
+            ) : (
+              <>✦ Summarize with Gemini</>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-export function CandidateDetailPanel({ candidateId, evaluation }: Props) {
+export function CandidateDetailPanel({ candidateId, evaluation, onSummarized }: Props) {
   const { candidate, loading, error } = useCandidateDetail(candidateId);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  async function handleSummarize() {
+    if (!evaluation) return;
+    setSummarizing(true);
+    setSummaryError(null);
+    try {
+      const updated = await summarizeCandidateEval(evaluation.id);
+      onSummarized?.(updated);
+    } catch (e) {
+      setSummaryError(e instanceof Error ? e.message : "Summarization failed");
+    } finally {
+      setSummarizing(false);
+    }
+  }
 
   if (candidateId === null) {
     return (
@@ -104,7 +158,14 @@ export function CandidateDetailPanel({ candidateId, evaluation }: Props) {
   return (
     <div className="p-5 space-y-5 overflow-y-auto h-full">
       {/* Score section — only in eval mode */}
-      {evaluation && <EvalSection evaluation={evaluation} />}
+      {evaluation && (
+        <EvalSection
+          evaluation={evaluation}
+          summarizing={summarizing}
+          summaryError={summaryError}
+          onSummarize={handleSummarize}
+        />
+      )}
 
       {/* Header */}
       <div className="flex items-start gap-4">

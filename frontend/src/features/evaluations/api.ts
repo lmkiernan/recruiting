@@ -38,3 +38,14 @@ export async function fetchRunCandidates(runId: number): Promise<CandidateEvalua
   if (!res.ok) throw new Error(`Failed to fetch run candidates: ${res.status}`);
   return res.json() as Promise<CandidateEvaluation[]>;
 }
+
+export async function summarizeCandidateEval(evalId: number): Promise<CandidateEvaluation> {
+  const res = await fetch(`${BASE}/candidate-evaluations/${evalId}/ai-summarize`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Summarize failed: ${res.status}`);
+  }
+  return res.json() as Promise<CandidateEvaluation>;
+}

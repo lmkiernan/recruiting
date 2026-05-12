@@ -79,6 +79,14 @@ export function DashboardPage() {
     setSelectedId(null);
   }
 
+  function handleSummarized(updated: CandidateEvaluation) {
+    setEvalRun((prev) =>
+      prev
+        ? { ...prev, evaluations: prev.evaluations.map((ev) => ev.id === updated.id ? updated : ev) }
+        : prev
+    );
+  }
+
   const evalItems = useMemo<CandidateEvaluation[]>(() => {
     if (!evalRun) return [];
     if (!searchInput) return evalRun.evaluations;
@@ -212,7 +220,7 @@ export function DashboardPage() {
 
       {/* Right — detail panel */}
       <aside className="w-96 shrink-0 bg-white overflow-hidden">
-        <CandidateDetailPanel candidateId={selectedId} evaluation={selectedEval} />
+        <CandidateDetailPanel candidateId={selectedId} evaluation={selectedEval} onSummarized={handleSummarized} />
       </aside>
     </div>
   );

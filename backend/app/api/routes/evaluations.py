@@ -15,10 +15,12 @@ from app.schemas.evaluation import (
     EvaluationRunWithResults,
     ScoreBreakdownItem,
 )
-from app.services.ai_evaluation_service import run_ai_evaluation
+from app.services.ai_evaluation_service import _blend, _profile_for_prompt, run_ai_evaluation
 from app.services.candidate_signal_service import score_all_candidates
+from app.services.gemini_service import summarize_candidate
 
 router = APIRouter(prefix="/evaluation-runs", tags=["evaluations"])
+candidate_evals_router = APIRouter(prefix="/candidate-evaluations", tags=["evaluations"])
 
 
 def _candidate_to_summary(candidate: Candidate) -> CandidateSummary:
@@ -147,3 +149,61 @@ def get_run_candidates(run_id: int, db: Session = Depends(get_db)) -> list[Candi
     )
 
     return [_build_eval_out(ev, ev.candidate) for ev in rows]
+
+
+# ---------------------------------------------------------------------------
+# Per-candidate on-demand Gemini summarization
+# ---------------------------------------------------------------------------
+
+@candidate_evals_router.post("/{eval_id}/ai-summarize", response_model=CandidateEvaluationOut)
+def ai_summarize_candidate_eval(
+    eval_id: int,
+    db: Session = Depends(get_db),
+) -> CandidateEvaluationOut:
+    """
+    Synchronously call Gemini to score and summarize a single candidate
+    evaluation that was not included in the bulk OpenAI pass.
+
+    Looks up the job description from the evaluation's run, builds a profile
+    dict, calls Gemini, blends the score, and persists the result.
+    """
+    ev = (
+        db.query(CandidateEvaluation)
+        .options(
+            selectinload(CandidateEvaluation.candidate)
+            .selectinload(Candidate.languages),
+            selectinload(CandidateEvaluation.candidate)
+            .selectinload(Candidate.repositories),
+            selectinload(CandidateEvaluation.evaluation_run),
+        )
+        .filter(CandidateEvaluation.id == eval_id)
+        .first()
+    )
+    if not ev:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    run = ev.evaluation_run
+    job = db.query(Job).filter(Job.id == run.job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    profile = _profile_for_prompt(ev.candidate)
+
+    try:
+        result = summarize_candidate(profile, job.description)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Gemini request failed: {exc}")
+
+    ai_score = result.get("ai_score")
+    ev.ai_score = ai_score
+    ev.final_score = _blend(ev.heuristic_score, ai_score)
+    ev.summary = result.get("summary") or ev.summary
+    ev.strengths_json = json.dumps(result.get("strengths") or [])
+    ev.concerns_json = json.dumps(result.get("concerns") or [])
+    ev.status = "completed"
+
+    db.commit()
+
+    return _build_eval_out(ev, ev.candidate)
