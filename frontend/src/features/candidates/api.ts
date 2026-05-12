@@ -14,17 +14,25 @@ function buildParams(filters: Partial<CandidateFilters>): URLSearchParams {
   return p;
 }
 
+async function apiFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init).catch(() => {
+    throw new Error("Network error — could not reach the server");
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Request failed: ${res.status}`);
+  }
+  return res;
+}
+
 export async function fetchCandidates(
   filters: Partial<CandidateFilters> = {}
 ): Promise<CandidateSummary[]> {
-  const params = buildParams(filters);
-  const res = await fetch(`${BASE}/candidates?${params}`);
-  if (!res.ok) throw new Error(`Failed to fetch candidates: ${res.status}`);
+  const res = await apiFetch(`${BASE}/candidates?${buildParams(filters)}`);
   return res.json() as Promise<CandidateSummary[]>;
 }
 
 export async function fetchCandidate(id: number): Promise<CandidateDetail> {
-  const res = await fetch(`${BASE}/candidates/${id}`);
-  if (!res.ok) throw new Error(`Failed to fetch candidate ${id}: ${res.status}`);
+  const res = await apiFetch(`${BASE}/candidates/${id}`);
   return res.json() as Promise<CandidateDetail>;
 }

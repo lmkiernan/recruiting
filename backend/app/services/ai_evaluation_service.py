@@ -39,31 +39,26 @@ Do not invent information that is not present in the candidate profiles."""
 def _profile_for_prompt(candidate: Candidate) -> dict:
     langs = sorted(candidate.languages, key=lambda l: l.repo_count, reverse=True)
     repos = sorted(candidate.repositories, key=lambda r: r.stars, reverse=True)
-    return {
+    profile: dict = {
         "id": candidate.id,
         "username": candidate.github_username,
-        "name": candidate.name,
-        "bio": candidate.bio,
-        "company": candidate.company,
-        "location": candidate.location,
         "followers": candidate.followers,
         "public_repos": candidate.public_repos,
-        "profile_completeness": candidate.profile_completeness,
-        "top_languages": [
-            {"language": l.language, "repos": l.repo_count}
-            for l in langs[:8]
-        ],
+        "top_languages": [l.language for l in langs[:5]],
         "top_repos": [
-            {
-                "name": r.name,
-                "description": r.description,
-                "language": r.language,
-                "stars": r.stars,
-                "pushed_at": r.pushed_at,
-            }
-            for r in repos[:8]
+            {"name": r.name, "language": r.language, "stars": r.stars, "pushed_at": r.pushed_at}
+            for r in repos[:5]
         ],
     }
+    if candidate.name:
+        profile["name"] = candidate.name
+    if candidate.bio:
+        profile["bio"] = candidate.bio[:150]
+    if candidate.company:
+        profile["company"] = candidate.company
+    if candidate.location:
+        profile["location"] = candidate.location
+    return profile
 
 
 # ---------------------------------------------------------------------------

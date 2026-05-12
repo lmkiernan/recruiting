@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
+from app.api.utils import candidate_to_summary
 from app.core.deps import get_db
 from app.models.candidate import Candidate, CandidateLanguage
 from app.schemas.candidate import CandidateDetail, CandidateSummary
@@ -9,26 +10,11 @@ from app.schemas.candidate import CandidateDetail, CandidateSummary
 router = APIRouter(prefix="/candidates", tags=["candidates"])
 
 
-def _build_summary(candidate: Candidate) -> CandidateSummary:
-    top_languages = sorted(candidate.languages, key=lambda l: l.repo_count, reverse=True)[:5]
-    return CandidateSummary(
-        **{
-            col: getattr(candidate, col)
-            for col in [
-                "id", "github_username", "name", "avatar_url", "profile_url",
-                "bio", "location", "company", "followers", "public_repos",
-                "profile_completeness",
-            ]
-        },
-        top_languages=top_languages,
-    )
-
-
 @router.get("", response_model=list[CandidateSummary])
 def list_candidates(
-    q: str | None = Query(None, description="Text search on name, username, bio, location"),
-    language: str | None = Query(None, description="Filter by primary language"),
-    location: str | None = Query(None, description="Filter by location (partial match)"),
+    q: str | None = Query(None),
+    language: str | None = Query(None),
+    location: str | None = Query(None),
     min_followers: int | None = Query(None, ge=0),
     max_followers: int | None = Query(None, le=1999),
     min_repos: int | None = Query(None, ge=0),
@@ -49,9 +35,13 @@ def list_candidates(
         )
 
     if language:
-        query = query.join(Candidate.languages).filter(
-            func.lower(CandidateLanguage.language) == language.lower()
+        # Subquery avoids a JOIN that would conflict with selectinload
+        matching_ids = (
+            db.query(CandidateLanguage.candidate_id)
+            .filter(func.lower(CandidateLanguage.language) == language.lower())
+            .scalar_subquery()
         )
+        query = query.filter(Candidate.id.in_(matching_ids))
 
     if location:
         query = query.filter(Candidate.location.ilike(f"%{location}%"))
@@ -68,40 +58,35 @@ def list_candidates(
     if profile_completeness:
         query = query.filter(Candidate.profile_completeness == profile_completeness)
 
-    candidates = (
-        query.order_by(Candidate.followers.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-
-    return [_build_summary(c) for c in candidates]
+    candidates = query.order_by(Candidate.followers.desc()).offset(offset).limit(limit).all()
+    return [candidate_to_summary(c) for c in candidates]
 
 
 @router.get("/{candidate_id}", response_model=CandidateDetail)
 def get_candidate(candidate_id: int, db: Session = Depends(get_db)) -> CandidateDetail:
     candidate = (
         db.query(Candidate)
-        .options(
-            selectinload(Candidate.repositories),
-            selectinload(Candidate.languages),
-        )
+        .options(selectinload(Candidate.repositories), selectinload(Candidate.languages))
         .filter(Candidate.id == candidate_id)
         .first()
     )
-
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     return CandidateDetail(
-        **{
-            col: getattr(candidate, col)
-            for col in [
-                "id", "github_username", "name", "avatar_url", "profile_url",
-                "bio", "location", "company", "followers", "following",
-                "public_repos", "profile_completeness", "created_at",
-            ]
-        },
+        id=candidate.id,
+        github_username=candidate.github_username,
+        name=candidate.name,
+        avatar_url=candidate.avatar_url,
+        profile_url=candidate.profile_url,
+        bio=candidate.bio,
+        location=candidate.location,
+        company=candidate.company,
+        followers=candidate.followers,
+        following=candidate.following,
+        public_repos=candidate.public_repos,
+        profile_completeness=candidate.profile_completeness,
+        created_at=candidate.created_at,
         repositories=candidate.repositories,
         languages=candidate.languages,
         top_languages=sorted(candidate.languages, key=lambda l: l.repo_count, reverse=True)[:5],

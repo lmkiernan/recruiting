@@ -9,6 +9,7 @@ Uses the Gemini REST API via httpx — no extra SDK dependency required.
 
 import json
 import logging
+import time
 
 import httpx
 
@@ -67,13 +68,25 @@ Candidate Profile:
         },
     }
 
-    resp = httpx.post(
-        GEMINI_URL,
-        params={"key": settings.GEMINI_API_KEY},
-        json=payload,
-        timeout=30,
-    )
-    resp.raise_for_status()
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                GEMINI_URL,
+                params={"key": settings.GEMINI_API_KEY},
+                json=payload,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            break
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500:
+                raise
+            last_exc = exc
+            logger.warning("Gemini attempt %d returned %d, retrying", attempt + 1, exc.response.status_code)
+            time.sleep(2 ** attempt)
+    else:
+        raise last_exc  # type: ignore[misc]
 
     data = resp.json()
     try:

@@ -1,13 +1,17 @@
 import json
 
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session, selectinload
 
+from app.api.utils import candidate_to_summary
 from app.core.deps import get_db
 from app.models.candidate import Candidate
 from app.models.evaluation import CandidateEvaluation, EvaluationRun
 from app.models.job import Job
-from app.schemas.candidate import CandidateLanguage, CandidateSummary
 from app.schemas.evaluation import (
     CandidateEvaluationOut,
     EvaluationRunCreate,
@@ -21,27 +25,6 @@ from app.services.gemini_service import summarize_candidate
 
 router = APIRouter(prefix="/evaluation-runs", tags=["evaluations"])
 candidate_evals_router = APIRouter(prefix="/candidate-evaluations", tags=["evaluations"])
-
-
-def _candidate_to_summary(candidate: Candidate) -> CandidateSummary:
-    top_languages = sorted(candidate.languages, key=lambda l: l.repo_count, reverse=True)[:5]
-    return CandidateSummary(
-        id=candidate.id,
-        github_username=candidate.github_username,
-        name=candidate.name,
-        avatar_url=candidate.avatar_url,
-        profile_url=candidate.profile_url,
-        bio=candidate.bio,
-        location=candidate.location,
-        company=candidate.company,
-        followers=candidate.followers,
-        public_repos=candidate.public_repos,
-        profile_completeness=candidate.profile_completeness,
-        top_languages=[
-            CandidateLanguage(language=l.language, repo_count=l.repo_count)
-            for l in top_languages
-        ],
-    )
 
 
 def _build_eval_out(ev: CandidateEvaluation, candidate: Candidate) -> CandidateEvaluationOut:
@@ -62,7 +45,7 @@ def _build_eval_out(ev: CandidateEvaluation, candidate: Candidate) -> CandidateE
         evidence=evidence,
         concerns=concerns,
         status=ev.status,
-        candidate=_candidate_to_summary(candidate),
+        candidate=candidate_to_summary(candidate),
     )
 
 
@@ -191,10 +174,9 @@ def ai_summarize_candidate_eval(
 
     try:
         result = summarize_candidate(profile, job.description)
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Gemini request failed: {exc}")
+        logger.error("Gemini summarize failed for eval %d: %s", eval_id, exc)
+        raise HTTPException(status_code=502, detail="AI summarization failed. Please try again.")
 
     ai_score = result.get("ai_score")
     ev.ai_score = ai_score

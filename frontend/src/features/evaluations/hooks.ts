@@ -18,10 +18,15 @@ export function useEvaluationPolling(
   onUpdate: (state: PollState) => void,
 ) {
   const active = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [polling, setPolling] = useState(false);
 
   const stop = useCallback(() => {
     active.current = false;
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     setPolling(false);
   }, []);
 
@@ -52,14 +57,16 @@ export function useEvaluationPolling(
         if (TERMINAL_STATUSES.has(runInfo.status)) {
           stop();
         } else {
-          setTimeout(tick, POLL_INTERVAL_MS);
+          timerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
         }
       } catch {
-        if (active.current) setTimeout(tick, POLL_INTERVAL_MS);
+        if (active.current) {
+          timerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
+        }
       }
     }
 
-    setTimeout(tick, POLL_INTERVAL_MS);
+    timerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
     return stop;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
