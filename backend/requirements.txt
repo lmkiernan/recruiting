@@ -1,2 +1,6 @@
-SQLAlchemy
+sqlalchemy
+psycopg2-binary
+alembic
 python-dotenv
+httpx
+pydantic-settings
