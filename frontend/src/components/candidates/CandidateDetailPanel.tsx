@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useShortlist } from "../../features/shortlists/ShortlistContext";
 import { useCandidateDetail } from "../../features/candidates/hooks";
 import { summarizeCandidateEval } from "../../features/evaluations/api";
 import type { CandidateEvaluation, ScoreBreakdownItem } from "../../features/evaluations/types";
@@ -126,6 +127,13 @@ export function CandidateDetailPanel({ candidateId, evaluation, onSummarized }: 
   const { candidate, loading, error } = useCandidateDetail(candidateId);
   const [summarizing, setSummarizing] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const { isSaved, toggle } = useShortlist();
+  const saved = candidateId !== null && isSaved(candidateId);
+
+  function handleSave() {
+    if (!candidateId) return;
+    toggle(candidateId);
+  }
 
   async function handleSummarize() {
     if (!evaluation) return;
@@ -172,8 +180,25 @@ export function CandidateDetailPanel({ candidateId, evaluation, onSummarized }: 
         {candidate.avatar_url && (
           <img src={candidate.avatar_url} alt={displayName} className="w-14 h-14 rounded-full shrink-0" />
         )}
-        <div className="min-w-0">
-          <h2 className="text-lg font-semibold text-gray-900 truncate">{displayName}</h2>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-gray-900 truncate">{displayName}</h2>
+            <button
+              onClick={handleSave}
+              title={saved ? "Remove from shortlist" : "Save to shortlist"}
+              className="shrink-0 p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              {saved ? (
+                <svg className="w-5 h-5 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
+                </svg>
+              )}
+            </button>
+          </div>
           <a
             href={candidate.profile_url ?? `https://github.com/${candidate.github_username}`}
             target="_blank"

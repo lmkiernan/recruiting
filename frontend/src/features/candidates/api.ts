@@ -1,6 +1,5 @@
+import { apiFetch, BASE } from "../../lib/apiFetch";
 import type { CandidateDetail, CandidateFilters, CandidateSummary } from "./types";
-
-const BASE = "/api";
 
 function buildParams(filters: Partial<CandidateFilters>): URLSearchParams {
   const p = new URLSearchParams();
@@ -12,17 +11,6 @@ function buildParams(filters: Partial<CandidateFilters>): URLSearchParams {
   if (filters.min_repos) p.set("min_repos", filters.min_repos);
   if (filters.profile_completeness) p.set("profile_completeness", filters.profile_completeness);
   return p;
-}
-
-async function apiFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const res = await fetch(input, init).catch(() => {
-    throw new Error("Network error — could not reach the server");
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? `Request failed: ${res.status}`);
-  }
-  return res;
 }
 
 export async function fetchCandidates(

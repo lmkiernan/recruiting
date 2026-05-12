@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { JobDescriptionInput } from "../components/jobs/JobDescriptionInput";
 import { CandidateCard } from "../components/candidates/CandidateCard";
 import { CandidateDetailPanel } from "../components/candidates/CandidateDetailPanel";
@@ -10,7 +10,11 @@ import { runEvaluation } from "../features/evaluations/api";
 import { useEvaluationPolling } from "../features/evaluations/hooks";
 import type { CandidateEvaluation, EvaluationRunWithResults } from "../features/evaluations/types";
 import { useCandidates } from "../features/candidates/hooks";
-import type { CandidateFilters } from "../features/candidates/types";
+import { fetchCandidate } from "../features/candidates/api";
+import type { CandidateDetail, CandidateFilters } from "../features/candidates/types";
+import { useShortlist } from "../features/shortlists/ShortlistContext";
+
+type View = "browse" | "shortlist";
 
 const EMPTY_FILTERS: CandidateFilters = {
   q: "",
@@ -23,6 +27,7 @@ const EMPTY_FILTERS: CandidateFilters = {
 };
 
 export function DashboardPage() {
+  const [view, setView] = useState<View>("browse");
   const [filters, setFilters] = useState<CandidateFilters>(EMPTY_FILTERS);
   const [searchInput, setSearchInput] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -35,6 +40,56 @@ export function DashboardPage() {
   const isEvalMode = evalRun !== null;
   const isAiRunning = evalRun?.status === "heuristic_complete";
 
+  // ---------------------------------------------------------------------------
+  // Shortlist view — cache fetched candidates, only load new IDs
+  // ---------------------------------------------------------------------------
+  const { savedIds, count } = useShortlist();
+  const [shortlistCache, setShortlistCache] = useState<Record<number, CandidateDetail>>({});
+  const [shortlistLoading, setShortlistLoading] = useState(false);
+  const [shortlistError, setShortlistError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
+
+  useEffect(() => {
+    if (view !== "shortlist" || savedIds.length === 0) return;
+    const unloaded = savedIds.filter((id) => !(id in shortlistCache));
+    if (unloaded.length === 0 || loadingRef.current) return;
+
+    loadingRef.current = true;
+    setShortlistLoading(true);
+    setShortlistError(null);
+
+    Promise.all(unloaded.map(fetchCandidate))
+      .then((results) =>
+        setShortlistCache((prev) => {
+          const next = { ...prev };
+          results.forEach((c) => { next[c.id] = c; });
+          return next;
+        }),
+      )
+      .catch((e) => setShortlistError(e instanceof Error ? e.message : "Failed to load candidates"))
+      .finally(() => { loadingRef.current = false; setShortlistLoading(false); });
+  }, [view, savedIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const shortlistCandidates = useMemo(
+    () => savedIds.map((id) => shortlistCache[id]).filter(Boolean) as CandidateDetail[],
+    [savedIds, shortlistCache],
+  );
+
+  const filteredShortlist = useMemo(() => {
+    if (!searchInput) return shortlistCandidates;
+    const term = searchInput.toLowerCase();
+    return shortlistCandidates.filter(
+      (c) =>
+        c.github_username.toLowerCase().includes(term) ||
+        (c.name ?? "").toLowerCase().includes(term) ||
+        (c.bio ?? "").toLowerCase().includes(term) ||
+        (c.location ?? "").toLowerCase().includes(term),
+    );
+  }, [shortlistCandidates, searchInput]);
+
+  // ---------------------------------------------------------------------------
+  // Evaluation polling
+  // ---------------------------------------------------------------------------
   const handlePollUpdate = useCallback(
     ({ status, completedCount, candidateCount, evaluations }: {
       status: string; completedCount: number; candidateCount: number; evaluations: CandidateEvaluation[];
@@ -46,16 +101,17 @@ export function DashboardPage() {
     [],
   );
 
-  // Poll for AI progress while status is not terminal
   useEvaluationPolling(
     isEvalMode ? evalRun.id : null,
     evalRun?.status ?? "completed",
     handlePollUpdate,
   );
 
-  // Browse mode — skip fetching while in eval mode
+  // ---------------------------------------------------------------------------
+  // Browse mode
+  // ---------------------------------------------------------------------------
   const { candidates, loading: browseLoading, error: browseError } = useCandidates(
-    isEvalMode ? null : { ...filters, q: searchInput }
+    isEvalMode || view === "shortlist" ? null : { ...filters, q: searchInput }
   );
 
   async function handleEvaluate() {
@@ -87,6 +143,12 @@ export function DashboardPage() {
     );
   }
 
+  function handleViewChange(next: View) {
+    setView(next);
+    setSelectedId(null);
+    setSearchInput("");
+  }
+
   const evalItems = useMemo<CandidateEvaluation[]>(() => {
     if (!evalRun) return [];
     if (!searchInput) return evalRun.evaluations;
@@ -107,40 +169,78 @@ export function DashboardPage() {
     [evalRun, selectedId],
   );
 
-  const listLoading = isEvalMode ? evaluating : browseLoading;
-  const listError = isEvalMode ? evalError : browseError;
-  const listCount = isEvalMode ? evalItems.length : candidates.length;
+  // Center column derived state
+  const isShortlistView = view === "shortlist";
+  const listLoading = isShortlistView ? shortlistLoading : isEvalMode ? evaluating : browseLoading;
+  const listError = isShortlistView ? shortlistError : isEvalMode ? evalError : browseError;
+  const listCount = isShortlistView
+    ? filteredShortlist.length
+    : isEvalMode ? evalItems.length : candidates.length;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <div className="flex flex-1 overflow-hidden bg-gray-50">
       {/* Left sidebar */}
       <aside className="w-64 shrink-0 border-r border-gray-200 bg-white flex flex-col">
-        <div className="px-4 py-4 border-b border-gray-100">
-          <h1 className="text-sm font-semibold text-gray-900">Recruiter Signal</h1>
-          <p className="text-xs text-gray-400 mt-0.5">GitHub candidate pool</p>
+        {/* View tabs */}
+        <div className="flex border-b border-gray-200">
+          <button
+            onClick={() => handleViewChange("browse")}
+            className={`flex-1 py-2.5 text-xs font-medium transition-colors border-b-2 ${
+              view === "browse"
+                ? "border-blue-500 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Browse
+          </button>
+          <button
+            onClick={() => handleViewChange("shortlist")}
+            className={`flex-1 py-2.5 text-xs font-medium transition-colors border-b-2 ${
+              view === "shortlist"
+                ? "border-blue-500 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Shortlisted{count > 0 ? ` (${count})` : ""}
+          </button>
         </div>
-        <div className="p-4 flex-1 overflow-y-auto space-y-6">
-          <JobDescriptionInput
-            value={jobDescription}
-            onChange={setJobDescription}
-            onEvaluate={handleEvaluate}
-            onClear={handleClearEval}
-            evaluating={evaluating}
-            hasResults={isEvalMode}
-          />
-          {!isEvalMode && (
-            <div>
-              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Filters</p>
-              <CandidateFiltersPanel filters={filters} onChange={setFilters} />
-            </div>
-          )}
-        </div>
+
+        {/* Sidebar content — hidden in shortlist view */}
+        {!isShortlistView && (
+          <div className="p-4 flex-1 overflow-y-auto space-y-6">
+            <JobDescriptionInput
+              value={jobDescription}
+              onChange={setJobDescription}
+              onEvaluate={handleEvaluate}
+              onClear={handleClearEval}
+              evaluating={evaluating}
+              hasResults={isEvalMode}
+            />
+            {!isEvalMode && (
+              <div>
+                <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Filters</p>
+                <CandidateFiltersPanel filters={filters} onChange={setFilters} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {isShortlistView && (
+          <div className="p-4 flex-1 flex flex-col justify-center items-center text-center text-gray-400">
+            <svg className="w-8 h-8 mb-2 text-gray-300" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" />
+            </svg>
+            <p className="text-xs">
+              {count === 0 ? "No candidates saved yet" : `${count} candidate${count !== 1 ? "s" : ""} saved`}
+            </p>
+          </div>
+        )}
       </aside>
 
       {/* Center — candidate list */}
       <main className="flex-1 flex flex-col min-w-0 border-r border-gray-200">
-        {/* Status banner */}
-        {isEvalMode && (
+        {/* Eval status banner */}
+        {!isShortlistView && isEvalMode && (
           <div className={`px-4 py-2 border-b flex items-center justify-between gap-2 ${
             isAiRunning ? "bg-amber-50 border-amber-100" : "bg-blue-50 border-blue-100"
           }`}>
@@ -152,10 +252,7 @@ export function DashboardPage() {
                   <span className="ml-1 inline-block animate-pulse">…</span>
                 </>
               ) : (
-                <>
-                  <span className="font-medium">AI analysis complete</span>
-                  {" · "}ranked by match
-                </>
+                <><span className="font-medium">AI analysis complete</span>{" · "}ranked by match</>
               )}
             </p>
             <button
@@ -171,7 +268,7 @@ export function DashboardPage() {
         <div className="px-4 py-3 border-b border-gray-200 bg-white">
           <input
             type="search"
-            placeholder="Search by name, username, bio, location…"
+            placeholder={isShortlistView ? "Search shortlisted candidates…" : "Search by name, username, bio, location…"}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
@@ -186,7 +283,25 @@ export function DashboardPage() {
           {listLoading && <Spinner />}
           {!listLoading && listError && <ErrorState message={listError} />}
 
-          {!listLoading && !listError && isEvalMode && (
+          {/* Shortlist view */}
+          {!listLoading && !listError && isShortlistView && (
+            <>
+              {filteredShortlist.length === 0 && (
+                <EmptyState message={count === 0 ? "Bookmark candidates to save them here" : "No matches"} />
+              )}
+              {filteredShortlist.map((c) => (
+                <CandidateCard
+                  key={c.id}
+                  candidate={c}
+                  selected={selectedId === c.id}
+                  onClick={() => setSelectedId(c.id)}
+                />
+              ))}
+            </>
+          )}
+
+          {/* Eval view */}
+          {!listLoading && !listError && !isShortlistView && isEvalMode && (
             <>
               {evalItems.length === 0 && <EmptyState />}
               {evalItems.map((ev) => (
@@ -202,7 +317,8 @@ export function DashboardPage() {
             </>
           )}
 
-          {!listLoading && !listError && !isEvalMode && (
+          {/* Browse view */}
+          {!listLoading && !listError && !isShortlistView && !isEvalMode && (
             <>
               {candidates.length === 0 && <EmptyState />}
               {candidates.map((c) => (
@@ -220,7 +336,11 @@ export function DashboardPage() {
 
       {/* Right — detail panel */}
       <aside className="w-96 shrink-0 bg-white overflow-hidden">
-        <CandidateDetailPanel candidateId={selectedId} evaluation={selectedEval} onSummarized={handleSummarized} />
+        <CandidateDetailPanel
+          candidateId={selectedId}
+          evaluation={selectedEval}
+          onSummarized={handleSummarized}
+        />
       </aside>
     </div>
   );

@@ -1,17 +1,5 @@
+import { apiFetch, BASE } from "../../lib/apiFetch";
 import type { CandidateEvaluation, EvaluationRunWithResults } from "./types";
-
-const BASE = "/api";
-
-async function apiFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const res = await fetch(input, init).catch(() => {
-    throw new Error("Network error — could not reach the server");
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? `Request failed: ${res.status}`);
-  }
-  return res;
-}
 
 async function createJob(description: string, title?: string): Promise<{ id: number }> {
   const res = await apiFetch(`${BASE}/jobs`, {
