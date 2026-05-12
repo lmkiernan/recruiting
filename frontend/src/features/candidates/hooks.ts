@@ -2,12 +2,17 @@ import { useEffect, useState } from "react";
 import { fetchCandidate, fetchCandidates } from "./api";
 import type { CandidateDetail, CandidateFilters, CandidateSummary } from "./types";
 
-export function useCandidates(filters: Partial<CandidateFilters>) {
+export function useCandidates(filters: Partial<CandidateFilters> | null) {
   const [candidates, setCandidates] = useState<CandidateSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(filters !== null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (filters === null) {
+      setCandidates([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
