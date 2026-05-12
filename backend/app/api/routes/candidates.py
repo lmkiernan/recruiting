@@ -33,7 +33,7 @@ def list_candidates(
     max_followers: int | None = Query(None, le=1999),
     min_repos: int | None = Query(None, ge=0),
     profile_completeness: str | None = Query(None, pattern="^(low|medium|high)$"),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ) -> list[CandidateSummary]:
